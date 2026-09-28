@@ -1,0 +1,25 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Access denied &middot; Office Seating Plan</title>
+<link rel="stylesheet" href="{% static 'css/deskplan.css' %}">
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-card">
+    <h1>Access denied</h1>
+    <p class="sub">Your account does not have admin access.</p>
+    <p class="hint">
+      Only staff accounts can change desk assignments. Ask your office
+      administrator to grant staff access, then sign in again.
+    </p>
+    <p class="hint" style="margin-top:16px">
+      <a class="btn" href="/">View the seating plan</a>
+      <a class="btn" href="/admin-login/">Sign in as someone else</a>
+    </p>
+  </div>
+</div>
+</body>
+</html>

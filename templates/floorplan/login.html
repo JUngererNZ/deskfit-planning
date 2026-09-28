@@ -1,0 +1,65 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin sign in &middot; Office Seating Plan</title>
+<link rel="stylesheet" href="{% static 'css/deskplan.css' %}">
+</head>
+<body data-page="login">
+
+<div class="login-wrap">
+  <div class="login-card">
+    <h1>Admin sign in</h1>
+    <p class="sub">Office Seating Plan</p>
+
+    <form id="login-form" autocomplete="on">
+      <div class="field">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" required
+               autocomplete="username" autofocus>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" required
+               autocomplete="current-password">
+      </div>
+      <button class="primary" type="submit" id="submit-btn">Sign in</button>
+    </form>
+
+    <p class="hint">
+      Staff accounts only. If you cannot sign in, ask your office administrator
+      to create a superuser on the server.
+    </p>
+    <p class="hint"><a href="/">&larr; Back to the seating plan</a></p>
+  </div>
+</div>
+
+<script src="{% static 'js/deskplan.js' %}"></script>
+<script>
+(function () {
+  const form = document.getElementById('login-form');
+  const btn = document.getElementById('submit-btn');
+  const username = document.getElementById('username');
+  const password = document.getElementById('password');
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    btn.disabled = true;
+    btn.textContent = 'Signing in...';
+    try {
+      await API.login(username.value.trim(), password.value);
+      window.location.href = '/admin-board/';
+    } catch (err) {
+      Toast.error(err);
+      password.value = '';
+      password.focus();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Sign in';
+    }
+  });
+})();
+</script>
+</body>
+</html>

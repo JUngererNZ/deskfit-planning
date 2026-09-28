@@ -1,0 +1,447 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin board &middot; Office Seating Plan</title>
+<link rel="stylesheet" href="{% static 'css/deskplan.css' %}">
+</head>
+<body class="admin" data-page="admin">
+
+<header class="topbar">
+  <div class="topbar-left">
+    <h1>Admin board</h1>
+    <p class="sub">Signed in as {{ username }}</p>
+  </div>
+  <div class="topbar-right">
+    <span class="badge" id="live-badge"><span class="dot"></span><span id="live-text">Connecting&hellip;</span></span>
+    <span class="badge" id="updated-badge">Updated &mdash;</span>
+    <a class="btn" href="/">Public view</a>
+    <button id="logout-btn" class="danger">Sign out</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="stats" id="stats"></div>
+
+  <div class="layout">
+    <div>
+      <div class="legend">
+        <strong>Legend</strong>
+        <span class="item"><span class="swatch" style="background:#FFD966"></span>Pod A</span>
+        <span class="item"><span class="swatch" style="background:#A9D08E"></span>Pod B</span>
+        <span class="item"><span class="swatch" style="background:#F4B084"></span>Pod C</span>
+        <span class="item"><span class="swatch" style="background:#8497B0"></span>Pod D</span>
+        <span class="item"><span class="swatch" style="background:#8EA9DB"></span>Pod E</span>
+        <span class="item"><span class="swatch" style="background:#9BC2E6"></span>Pod F</span>
+        <span class="item"><span class="swatch" style="background:#C9C9C9"></span>Fixed area</span>
+      </div>
+
+      <p class="hint" id="mode-hint">
+        <strong>Drag</strong> someone onto a spare desk to move them, or
+        <strong>click</strong> a person and then click a destination desk.
+        Clicking a spare desk while a person is selected swaps the two.
+        Select a person and use <em>Unassign</em> to free their seat.
+      </p>
+
+      <div class="plan-scroll">
+        <div id="plan"></div>
+      </div>
+    </div>
+
+    <aside>
+      <div class="panel" style="margin-bottom:16px">
+        <h2>Person details</h2>
+        <div class="body" id="editor">
+          <p class="hint" style="margin:0">
+            Click an occupied desk to edit that person's name, department,
+            role and employment status.
+          </p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Roster &middot; <span id="roster-count">0</span></h2>
+        <div class="roster" id="roster"></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script src="{% static 'js/deskplan.js' %}"></script>
+<script>
+(function () {
+  const planEl = document.getElementById('plan');
+  const statsEl = document.getElementById('stats');
+  const rosterEl = document.getElementById('roster');
+  const rosterCount = document.getElementById('roster-count');
+  const editorEl = document.getElementById('editor');
+  const updatedBadge = document.getElementById('updated-badge');
+  const liveBadge = document.getElementById('live-badge');
+  const liveText = document.getElementById('live-text');
+
+  const STATUS = {
+    perm: 'Permanent', contract: 'Contract',
+    temp: 'Temp', unknown: 'Unknown',
+  };
+
+  let selectedPersonId = null;   // desk currently acting as the move source
+  let editingPersonId = null;    // person shown in the details editor
+  let busy = false;
+
+  /* ------------------------------------------------------------- status */
+
+  function setLive(state) {
+    const map = {
+      live: ['live', 'Live'],
+      polling: ['polling', 'Auto-refresh (5s)'],
+      offline: ['offline', 'Offline'],
+      connecting: ['', 'Connecting...'],
+    };
+    const [cls, text] = map[state] || map.connecting;
+    liveBadge.className = 'badge ' + cls;
+    liveText.textContent = text;
+  }
+
+  function setUpdated() {
+    updatedBadge.textContent = 'Updated ' + new Date().toLocaleTimeString();
+  }
+
+  function renderStats(s) {
+    if (!s) return;
+    const items = [
+      ['Desks', s.assignable_desks], ['Occupied', s.occupied_desks],
+      ['Spare', s.empty_desks], ['People', s.total_people],
+      ['Unseated', s.unassigned_people], ['Awaiting details', s.placeholders],
+    ];
+    statsEl.innerHTML = items.map(([k, n]) =>
+      `<div class="stat"><div class="n">${n}</div><div class="k">${k}</div></div>`
+    ).join('');
+  }
+
+  /* ------------------------------------------------------------ roster */
+
+  function deskRefFor(personId) {
+    const snap = Plan.snapshot;
+    if (!snap) return null;
+    for (const d of snap.desks) {
+      if (d.occupant && d.occupant.id === personId) return d.ref;
+    }
+    return null;
+  }
+
+  function renderRoster() {
+    const snap = Plan.snapshot;
+    if (!snap) return;
+    const people = snap.people;
+    rosterCount.textContent = people.length;
+
+    rosterEl.innerHTML = people.map(p => {
+      const ref = deskRefFor(p.id);
+      const tags = [];
+      if (p.is_placeholder) tags.push('<span class="tag ph">placeholder</span>');
+      if (!ref) tags.push('<span class="tag unseated">unseated</span>');
+      return `<div class="roster-item ${editingPersonId === p.id ? 'active' : ''}" data-person="${p.id}">
+        <div class="r-name">
+          <span class="${p.is_placeholder ? 'placeholder' : ''}"
+                style="${p.is_placeholder ? 'color:var(--ink-faint);font-style:italic' : ''}">${escapeHtml(p.name)}</span>
+          <span style="font-size:11px;color:var(--ink-faint)">${escapeHtml([p.role, p.department].filter(Boolean).join(' / '))}</span>
+        </div>
+        ${tags.join(' ')}
+        <span class="r-desk">${ref || '--'}</span>
+      </div>`;
+    }).join('');
+
+    rosterEl.querySelectorAll('.roster-item').forEach(item => {
+      item.addEventListener('click', () => {
+        editingPersonId = Number(item.dataset.person);
+        renderRoster();
+        renderEditor();
+      });
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  /* ------------------------------------------------------------ editor */
+
+  function renderEditor() {
+    const snap = Plan.snapshot;
+    if (!snap) return;
+    const person = snap.people.find(p => p.id === editingPersonId);
+    if (!person) {
+      editorEl.innerHTML = `<p class="hint" style="margin:0">
+        Click an occupied desk to edit that person's name, department,
+        role and employment status.</p>`;
+      return;
+    }
+    const ref = deskRefFor(person.id);
+    const options = Object.entries(STATUS).map(([k, v]) =>
+      `<option value="${k}" ${person.employment_status === k ? 'selected' : ''}>${v}</option>`
+    ).join('');
+
+    editorEl.innerHTML = `
+      <form id="person-form">
+        <div class="field">
+          <label for="p-name">Name</label>
+          <input id="p-name" name="name" type="text" maxlength="100"
+                 value="${escapeHtml(person.name)}" required>
+        </div>
+        <div class="field">
+          <label for="p-dept">Department</label>
+          <input id="p-dept" name="department" type="text" maxlength="100"
+                 value="${escapeHtml(person.department)}"
+                 placeholder="e.g. Sales">
+        </div>
+        <div class="field">
+          <label for="p-role">Role</label>
+          <input id="p-role" name="role" type="text" maxlength="100"
+                 value="${escapeHtml(person.role)}"
+                 placeholder="e.g. SW ENGG">
+        </div>
+        <div class="field">
+          <label for="p-status">Employment status</label>
+          <select id="p-status" name="employment_status">${options}</select>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="primary" type="submit" id="save-btn">Save details</button>
+          <button type="button" id="unassign-btn"
+                  ${ref ? '' : 'disabled'}>Unassign from ${ref || 'seat'}</button>
+        </div>
+        <p class="hint">Currently seated: <strong>${ref || 'not seated'}</strong>
+          ${person.is_placeholder ? '<br>Placeholder name &mdash; replace it with the real name.' : ''}</p>
+      </form>`;
+
+    const form = document.getElementById('person-form');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const btn = document.getElementById('save-btn');
+      btn.disabled = true;
+      try {
+        const result = await API.updatePerson(person.id, {
+          name: document.getElementById('p-name').value,
+          department: document.getElementById('p-dept').value,
+          role: document.getElementById('p-role').value,
+          employment_status: document.getElementById('p-status').value,
+        });
+        Toast.show(
+          result.changed.length
+            ? `Saved: ${result.changed.join('; ')}`
+            : 'No changes to save.',
+          result.changed.length ? 'ok' : 'info');
+      } catch (err) {
+        Toast.error(err);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById('unassign-btn').addEventListener('click', async () => {
+      try {
+        await API.move(person.id, null);
+        Toast.show(`${person.name} is now unseated.`, 'ok');
+        selectedPersonId = null;
+      } catch (err) {
+        Toast.error(err);
+      }
+    });
+  }
+
+  /* ------------------------------------------------------------- moving */
+
+  function applySnapshot(snapshot, reason) {
+    Plan.render(snapshot, {interactive: true});
+    renderStats(snapshot.stats);
+    renderRoster();
+    renderEditor();
+    setUpdated();
+    applySelectionHighlight();
+    if (reason === 'move' || reason === 'person_update') {
+      // A move made by another admin arrived over the socket.
+      if (reason === 'move') Toast.show('Plan updated by another admin.', 'info');
+    }
+  }
+
+  async function attemptMove(personId, deskId, swap) {
+    if (busy) return;
+    busy = true;
+    const desk = Plan.deskAt(deskId);
+    try {
+      const result = await API.move(personId, deskId, undefined, swap);
+      if (result.swapped_with) {
+        Toast.show(
+          `Swapped ${result.person.name} with ${result.swapped_with.name}.`, 'ok');
+      } else if (desk) {
+        Toast.show(`${result.person.name} moved to ${desk.ref}.`, 'ok');
+      } else {
+        Toast.show(`${result.person.name} unseated.`, 'ok');
+      }
+      selectedPersonId = null;
+    } catch (err) {
+      // Refresh so the admin sees the true current state after any rejection.
+      try { await API.floorplan().then(s => applySnapshot(s, 'refresh')); }
+      catch (e) { /* offline; the next poll will catch up */ }
+      Toast.error(err);
+      if (err.code === 'DESK_OCCUPIED') {
+        Toast.show(
+          'Tip: click the occupied desk while the person is selected to swap them.',
+          'warn', '', 7000);
+      }
+    } finally {
+      busy = false;
+    }
+  }
+
+  function applySelectionHighlight() {
+    for (const el of Plan.cells.values()) el.classList.remove('selected');
+    if (selectedPersonId == null) return;
+    const snap = Plan.snapshot;
+    for (const d of snap.desks) {
+      if (d.occupant && d.occupant.id === selectedPersonId) {
+        const el = Plan.cellAt(d.id);
+        if (el) el.classList.add('selected');
+      }
+    }
+  }
+
+  /* ------------------------------------------------- drag and drop + click */
+
+  let dragPersonId = null;
+
+  planEl.addEventListener('dragstart', (event) => {
+    const cell = event.target.closest('.cell.occupied');
+    if (!cell) return;
+    const desk = Plan.deskAt(cell.dataset.deskId);
+    if (!desk || !desk.occupant) return;
+    dragPersonId = desk.occupant.id;
+    cell.classList.add('dragging');
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', String(dragPersonId));
+  });
+
+  planEl.addEventListener('dragend', (event) => {
+    const cell = event.target.closest('.cell');
+    if (cell) cell.classList.remove('dragging');
+    clearDropStyles();
+    dragPersonId = null;
+  });
+
+  planEl.addEventListener('dragover', (event) => {
+    const cell = event.target.closest('.cell');
+    if (!cell || cell.dataset.kind === 'fixed') return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    markDrop(cell, true);
+  });
+
+  planEl.addEventListener('dragleave', (event) => {
+    const cell = event.target.closest('.cell');
+    if (cell) cell.classList.remove('drop-ok', 'drop-bad');
+  });
+
+  planEl.addEventListener('drop', (event) => {
+    const cell = event.target.closest('.cell');
+    if (!cell) return;
+    event.preventDefault();
+    clearDropStyles();
+    if (dragPersonId == null) return;
+
+    const desk = Plan.deskAt(cell.dataset.deskId);
+    if (!desk) return;
+    if (desk.kind === 'fixed') {
+      Toast.show(`${desk.ref} is a fixed area (${desk.label}) and cannot hold a person.`,
+                 'error', 'DESK_NOT_ASSIGNABLE');
+      return;
+    }
+    if (desk.occupant && desk.occupant.id === dragPersonId) {
+      selectedPersonId = null;
+      applySelectionHighlight();
+      return;
+    }
+    attemptMove(dragPersonId, desk.id, false);
+  });
+
+  function markDrop(cell, ok) {
+    clearDropStyles();
+    cell.classList.add(ok ? 'drop-ok' : 'drop-bad');
+  }
+  function clearDropStyles() {
+    planEl.querySelectorAll('.drop-ok,.drop-bad')
+      .forEach(el => el.classList.remove('drop-ok', 'drop-bad'));
+  }
+
+  /* Click-to-select then click-target: the tablet/touch path, and the only
+     path that supports swapping. */
+  planEl.addEventListener('click', async (event) => {
+    const cell = event.target.closest('.cell');
+    if (!cell) return;
+    const desk = Plan.deskAt(cell.dataset.deskId);
+    if (!desk) return;
+
+    if (desk.kind === 'fixed') {
+      Toast.show(`${desk.ref} is a fixed area (${desk.label}).`, 'info');
+      return;
+    }
+
+    // Nothing selected yet: pick this occupant up as the move source.
+    if (selectedPersonId == null) {
+      if (desk.occupant) {
+        selectedPersonId = desk.occupant.id;
+        editingPersonId = desk.occupant.id;
+        applySelectionHighlight();
+        renderRoster();
+        renderEditor();
+        Toast.show(
+          `${desk.occupant.name} selected. Click a spare desk to move, or another person to swap.`,
+          'info', '', 6000);
+      }
+      return;
+    }
+
+    if (desk.occupant && desk.occupant.id === selectedPersonId) {
+      selectedPersonId = null;
+      applySelectionHighlight();
+      return;
+    }
+
+    // Target chosen. An occupied target means a swap.
+    const swap = !!(desk.occupant);
+    await attemptMove(selectedPersonId, desk.id, swap);
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && selectedPersonId != null) {
+      selectedPersonId = null;
+      applySelectionHighlight();
+    }
+  });
+
+  /* ------------------------------------------------------------- sign out */
+
+  document.getElementById('logout-btn').addEventListener('click', async () => {
+    try { await API.logout(); } catch (e) { /* sign out locally regardless */ }
+    window.location.href = '/';
+  });
+
+  /* ---------------------------------------------------------------- boot */
+
+  Plan.init(planEl);
+
+  const live = new LiveUpdates({
+    onSnapshot: applySnapshot,
+    onStatus: setLive,
+    pollMs: 5000,
+  });
+
+  API.floorplan()
+    .then(snapshot => { applySnapshot(snapshot, 'initial'); live.start(); })
+    .catch(err => { setLive('offline'); Toast.error(err); live.start(); });
+
+  window.addEventListener('beforeunload', () => live.stop());
+})();
+</script>
+</body>
+</html>

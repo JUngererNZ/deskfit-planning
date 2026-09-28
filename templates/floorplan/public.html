@@ -1,0 +1,138 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Office Seating Plan</title>
+<link rel="stylesheet" href="{% static 'css/deskplan.css' %}">
+</head>
+<body data-page="public">
+
+<header class="topbar">
+  <div class="topbar-left">
+    <h1>Office Seating Plan</h1>
+    <p class="sub">Live desk allocation &middot; read-only</p>
+  </div>
+  <div class="topbar-right">
+    <span class="badge" id="live-badge" title="Connection status">
+      <span class="dot"></span><span id="live-text">Connecting&hellip;</span>
+    </span>
+    <span class="badge" id="updated-badge" title="Last update">Updated &mdash;</span>
+    {% if is_admin %}
+      <a class="btn" href="/admin-board/">Admin board</a>
+    {% else %}
+      <a class="btn" href="/admin-login/">Admin sign in</a>
+    {% endif %}
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="stats" id="stats"></div>
+
+  <div class="legend">
+    <strong>Legend</strong>
+    <span class="item"><span class="swatch" style="background:#FFD966"></span>Pod A</span>
+    <span class="item"><span class="swatch" style="background:#A9D08E"></span>Pod B</span>
+    <span class="item"><span class="swatch" style="background:#F4B084"></span>Pod C</span>
+    <span class="item"><span class="swatch" style="background:#8497B0"></span>Pod D</span>
+    <span class="item"><span class="swatch" style="background:#8EA9DB"></span>Pod E</span>
+    <span class="item"><span class="swatch" style="background:#9BC2E6"></span>Pod F</span>
+    <span class="item"><span class="swatch" style="background:#C9C9C9"></span>Fixed area</span>
+    <span class="item"><span class="swatch" style="background:#fff;border-style:dashed"></span>Spare desk</span>
+  </div>
+
+  <p class="hint">
+    Names shown in <em>grey italics</em> are placeholders pending real staff
+    details. This view updates automatically when an admin changes an assignment.
+  </p>
+
+  <div class="plan-scroll">
+    <div id="plan"></div>
+  </div>
+</div>
+
+<script src="{% static 'js/deskplan.js' %}"></script>
+<script>
+(function () {
+  const LIVE = {
+    live:    {cls: 'live',    text: 'Live'},
+    polling: {cls: 'polling', text: 'Auto-refresh (5s)'},
+    offline: {cls: 'offline', text: 'Offline'},
+    connecting: {cls: '',     text: 'Connecting...'},
+  };
+
+  const badge = document.getElementById('live-badge');
+  const liveText = document.getElementById('live-text');
+  const updatedBadge = document.getElementById('updated-badge');
+  const statsEl = document.getElementById('stats');
+
+  function setStatus(state) {
+    const cfg = LIVE[state] || LIVE.connecting;
+    badge.className = 'badge ' + cfg.cls;
+    liveText.textContent = cfg.text;
+  }
+
+  function setUpdated() {
+    const now = new Date();
+    updatedBadge.textContent = 'Updated ' + now.toLocaleTimeString();
+  }
+
+  function renderStats(s) {
+    if (!s) return;
+    const items = [
+      ['Desks', s.assignable_desks],
+      ['Occupied', s.occupied_desks],
+      ['Spare', s.empty_desks],
+      ['People', s.total_people],
+      ['Unseated', s.unassigned_people],
+      ['Awaiting details', s.placeholders],
+    ];
+    statsEl.innerHTML = items.map(([k, n]) =>
+      `<div class="stat"><div class="n">${n}</div><div class="k">${k}</div></div>`
+    ).join('');
+  }
+
+  Plan.init(document.getElementById('plan'));
+
+  const live = new LiveUpdates({
+    onSnapshot(snapshot, reason) {
+      if (reason === 'update' || reason === 'move' || reason === 'person_update') {
+        Plan.update(snapshot, reason);
+      } else {
+        Plan.render(snapshot, {interactive: false});
+      }
+      renderStats(snapshot.stats);
+      setUpdated();
+    },
+    onStatus: setStatus,
+    pollMs: 5000,
+  });
+
+  // First paint, then go live.
+  API.floorplan()
+    .then(snapshot => {
+      Plan.render(snapshot, {interactive: false});
+      renderStats(snapshot.stats);
+      setUpdated();
+      live.start();
+    })
+    .catch(err => {
+      setStatus('offline');
+      Toast.error(err);
+      live.start();
+    });
+
+  window.addEventListener('beforeunload', () => live.stop());
+
+  // Refresh when the tab becomes visible again, so a laptop waking from sleep
+  // does not show a stale plan.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    API.floorplan()
+      .then(snapshot => { Plan.render(snapshot, {interactive: false}); renderStats(snapshot.stats); setUpdated(); })
+      .catch(() => {});
+  });
+})();
+</script>
+</body>
+</html>
